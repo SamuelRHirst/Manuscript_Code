@@ -1,0 +1,100 @@
+# 1 # Trimming raw reads
+#!/bin/bash
+# We trimmed all reads using Trim Galore! with default parameters (fastqc)
+
+RAW_DIR="/shares_bgfs/margres_lab/Snakes/Transcriptomes/Cadam/raw"
+OUT_DIR="/shares_bgfs/margres_lab/Snakes/Transcriptomes/Cadam/trimmed_reads"
+
+mkdir -p $OUT_DIR
+
+# Loop through R1 files and find matching R2
+for R1 in ${RAW_DIR}/*_R1_001.fastq.gz; do
+    R2=${R1/_R1_001.fastq.gz/_R2_001.fastq.gz}
+    
+    trim_galore --paired --fastqc --gzip \
+        -o $OUT_DIR \
+        $R1 $R2
+done
+
+################################################################################################
+
+# 2 # mapping to reference genome using Hisat2
+#!/bin/bash
+# We used Hisat2 with parameters -k 10 and --dta to map each transcriptome to the reference genome Cadamanteus\_3dDNAHiC\_1.2 (Hogan et al., 2024). 
+#For all individuals except for the single mainland juvenile, mapped left and right venom gland transcriptomes were merged using samtools merge.
+
+# Path Definitions
+GENOME="/shares_bgfs/margres_lab/Snakes/Genomes/Cadam/DRR0105/Cadamanteus_3dDNAHiC_1.2.fasta"
+ANNO="/shares_bgfs/margres_lab/Snakes/Genomes/Cadam/DRR0105/MASTER_Cadam_genes_cds_mRNA_30Jun21.gtf"
+TRIM_DIR="/shares_bgfs/margres_lab/Snakes/Transcriptomes/Cadam/trimmed_reads"
+OUT_DIR="/shares_bgfs/margres_lab/Snakes/Transcriptomes/Cadam/Analyses/hisat2"
+
+mkdir -p $OUT_DIR
+module load apps/samtools/1.3.1
+
+# 1. Build Index
+hisat2_extract_splice_sites.py $ANNO > Cadam_genome.ss
+hisat2_extract_exons.py $ANNO > Cadam_Genome.exon
+hisat2-build -p 50 --ss Cadam_genome.ss --exon Cadam_Genome.exon -f $GENOME Cadam_genome_Anno
+
+# 2. Alignment Loop
+for F_READ in ${TRIM_DIR}/*_val_1.fq.gz; do
+    # Extract sample ID (e.g., Cadam-DRR0044)
+    SAMPLE=$(basename "$F_READ" _S306_L000_R1_001_val_1.fq.gz)
+    R_READ=${F_READ/_val_1.fq.gz/_val_2.fq.gz}
+
+    echo "Processing $SAMPLE..."
+
+    # Run HISAT2
+    hisat2 -p 50 -k 10 --dta -x Cadam_genome_Anno \
+        -1 $F_READ -2 $R_READ -S ${OUT_DIR}/${SAMPLE}.sam
+
+    # Convert, Sort, and Index
+    samtools view -b ${OUT_DIR}/${SAMPLE}.sam > ${OUT_DIR}/${SAMPLE}_VG.bam
+    samtools sort ${OUT_DIR}/${SAMPLE}_VG.bam -o ${OUT_DIR}/${SAMPLE}_VG_Sorted.bam
+    samtools index ${OUT_DIR}/${SAMPLE}_VG_Sorted.bam
+
+    # Clean up intermediate SAM and unsorted BAM
+    rm ${OUT_DIR}/${SAMPLE}.sam ${OUT_DIR}/${SAMPLE}_VG.bam
+done
+
+
+################################################################################################
+
+# 3 # Estimating read counts and TPM using HTSeqcount and Stringtie2, respectively. 
+#!/bin/bash
+# We estimated read counts for genes using HTSeq-count with --minaqual 10 to remove reads with 10% probability of multiple alignments, 
+# We calculated transcript--per--million (TPM) of each gene using Stringtie2.
+
+# Paths
+ANNO_HTSEQ="/shares_bgfs/margres_lab/Snakes/Genomes/Cadam/DRR0105/MASTER_Cadam_annos_used_for_qMS-REF_18Aug23.gff3"
+ANNO_STRINGTIE="/shares_bgfs/margres_lab/Snakes/Genomes/Cadam/DRR0105/MASTER_Cadam_genes_cds_mRNA_30Jun21.gff3"
+BAM_DIR="/shares_bgfs/margres_lab/Snakes/Transcriptomes/Cadam/Analyses/hisat2"
+ST2_DIR="/shares_bgfs/margres_lab/Snakes/Transcriptomes/Cadam/Analyses/stringtie2"
+
+mkdir -p $ST2_DIR
+
+for BAM in ${BAM_DIR}/*_VG_Sorted.bam; do
+    SAMPLE=$(basename "$BAM" _VG_Sorted.bam)
+    
+    # --- HTSeq-count ---
+    htseq-count \
+        --nprocesses=5 \
+        --format=bam --type=gene --idattr=ID \
+        --stranded=no --order=pos --nonunique=all -a=10 \
+        --counts_output=${BAM_DIR}/${SAMPLE}_VenomGland.csv \
+        $BAM $ANNO_HTSEQ
+
+    # --- StringTie ---
+    stringtie -p 50 -G $ANNO_STRINGTIE -e \
+        -o ${ST2_DIR}/${SAMPLE}_VenomGland.gtf \
+        -B -A ${ST2_DIR}/${SAMPLE}_VenomGland_abund.tab \
+        $BAM
+
+    echo "Finished processing $SAMPLE"
+done
+
+################################################################################################
+
+
+
