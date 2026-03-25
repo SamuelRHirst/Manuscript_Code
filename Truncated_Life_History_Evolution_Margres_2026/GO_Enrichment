@@ -1,0 +1,74 @@
+#!/bin/bash
+# run_interproscan.sh
+
+# Paths
+IPR_PATH="/shares_bgfs/margres_lab/Snakes/Genomes/Cruber/compute/interproscan/interproscan-5.72-103.0/interproscan.sh"
+PROTEINS="MASTER_Cadam_annos_used_for_qMS-REF_18Aug23_PROTEINS_nodots.fasta"
+OUT_TSV="interpro_output.tsv"
+
+# Run InterProScan
+# We include --goterms to ensure GO IDs are mapped to each protein
+$IPR_PATH -i $PROTEINS \
+    -f tsv \
+    -goterms \
+    -o $OUT_TSV \
+    --applications Pfam,SMART,SUPERFAMILY,Coils
+
+
+
+# go_enrichment.R
+library(tidyr)
+library(dplyr)
+library(clusterProfiler)
+
+# 1. Prepare GO Annotation Database (TERM2GENE) ---------------------------
+
+# Load the raw InterProScan TSV
+# Column 1 is usually Protein Accession, Column 14 is usually GO terms
+ipr_raw <- read.table("interpro_output.tsv", sep="\t", header=FALSE, fill=TRUE, quote="")
+
+# Extract Gene-to-GO mapping
+# Note: InterProScan columns can vary; verify if Col 1 (Gene) and Col 14 (GO) match your output
+go_map <- ipr_raw %>%
+  select(Gene = V1, GO = V14) %>%
+  filter(GO != "") %>%
+  separate_rows(GO, sep = "\\|") %>%
+  distinct()
+
+# clusterProfiler needs TERM2GENE format (Term first, then Gene)
+term2gene <- go_map %>% select(GO, Gene)
+
+# 2. Load Differential Expression Data ------------------------------------
+
+de_data <- read.csv("DESEQ2_Adult_Island_Adult_Mainland_TFs.csv")
+
+# Filter for strongly DE genes (Log2FC >= 2 or <= -2)
+de_gene_list <- de_data %>%
+  filter(abs(log2FoldChange) >= 2) %>%
+  pull(gene) %>%
+  gsub("-", "_", .) # Consistent naming with the genome annotation
+
+# 3. Run Enrichment -------------------------------------------------------
+
+go_results <- enricher(
+  gene          = de_gene_list,
+  universe      = unique(term2gene$Gene),
+  TERM2GENE     = term2gene,
+  pAdjustMethod = "fdr",
+  pvalueCutoff  = 0.05,
+  qvalueCutoff  = 0.05
+)
+
+# 4. Save and Plot --------------------------------------------------------
+
+if(!is.null(go_results) && nrow(go_results) > 0) {
+    write.csv(as.data.frame(go_results), "GO_Enrichment_Results.csv")
+    
+    # Generate a standard dotplot for the manuscript
+    pdf("GO_Dotplot.pdf", width = 8, height = 6)
+    print(dotplot(go_results, showCategory=20) + 
+          ggtitle("GO Enrichment: Adult Island vs Mainland TFs"))
+    dev.off()
+} else {
+    message("No significant GO terms found.")
+}
