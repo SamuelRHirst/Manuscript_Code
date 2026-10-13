@@ -1,0 +1,11 @@
+AH14K04	hybrid
+AH19K01	coastal
+AH19K05	coastal
+AH19K17	inland
+AH21K03	inland
+Coastal_ref	coastal
+JF08K03	coastal
+JF08K05	coastal
+KF14K01	inland
+KF15K02	inland
+MF12K02	hybrid
