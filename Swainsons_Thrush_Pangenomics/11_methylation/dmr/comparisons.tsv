@@ -1,0 +1,4 @@
+comparison	baseline	compare
+coastal_vs_inland	coastal	inland
+coastal_vs_hybrid	coastal	hybrid
+inland_vs_hybrid	inland	hybrid
